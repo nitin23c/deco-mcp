@@ -1,0 +1,38 @@
+[Unit]
+Description=deco-mcp: MCP server for a TP-Link Deco router
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deco-mcp
+Group=deco-mcp
+# systemd reads this as root before dropping privileges, so it can stay 0600 root.
+EnvironmentFile=/etc/deco-mcp.env
+ExecStart=/opt/deco-mcp/venv/bin/python -I -m deco_mcp
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

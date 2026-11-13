@@ -1,0 +1,3 @@
+# Server install: the library pinned to the audited git commit (tag v2.1.1).
+# install.sh compiles this into a hashed requirements.txt.
+tplink-deco-api @ git+https://github.com/roquerodrigo/tplink-deco-api@4125d72d6b1d9d859a93f1a8174e986c8dbe8936

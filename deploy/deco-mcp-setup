@@ -1,0 +1,72 @@
+#!/bin/sh
+# deco-mcp-setup: write /etc/deco-mcp.env (mode 600, root).
+#
+# Asks for the router password without echoing it. Keeps the existing MCP
+# token and any other settings already in the file.
+#
+#   deco-mcp-setup               set or change the router password
+#   deco-mcp-setup --new-token   also replace the MCP token
+#   deco-mcp-setup --print-token print the token (to copy into a client)
+set -eu
+umask 077
+ENV=${DECO_MCP_ENV:-/etc/deco-mcp.env}
+
+get() { [ -f "$ENV" ] && sed -n "s/^$1=//p" "$ENV" | tail -n 1; }
+
+case "${1:-}" in
+  --print-token) get MCP_TOKEN; exit 0 ;;
+  --new-token|"") ;;
+  *) echo "usage: $0 [--new-token|--print-token]" >&2; exit 2 ;;
+esac
+
+token=$(get MCP_TOKEN || true)
+if [ "${1:-}" = "--new-token" ] || [ -z "$token" ]; then
+  token=$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')
+fi
+
+is_ipv4() {
+  echo "$1" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+}
+
+host=$(get DECO_HOST || true)
+is_ipv4 "$host" || host=""
+while [ -z "$host" ]; do
+  # Hidden too, in case the password is typed here by mistake.
+  printf 'Router IP address (hidden, Enter for 192.168.68.1): '
+  if [ -t 0 ]; then stty -echo; read -r host; stty echo; printf '\n'; else read -r host; fi
+  host=${host:-192.168.68.1}
+  if ! is_ipv4 "$host"; then
+    echo "That is not an IPv4 address; nothing was saved. Try again." >&2
+    host=""
+  fi
+done
+echo "Router: $host"
+
+if [ -t 0 ]; then
+  printf 'Deco admin password (the owner account password used in the Deco app): '
+  stty -echo; trap 'stty echo' EXIT INT TERM
+  read -r pw
+  stty echo; trap - EXIT INT TERM
+  printf '\n'
+else
+  read -r pw
+fi
+[ -n "$pw" ] || { echo "Empty password, nothing written." >&2; exit 1; }
+
+tmp=$(mktemp "$(dirname "$ENV")/.deco-mcp.env.XXXXXX")
+{
+  if [ -f "$ENV" ]; then
+    grep -v -E '^(DECO_PASSWORD|MCP_TOKEN|DECO_HOST)=' "$ENV" || true
+  else
+    echo "# deco-mcp settings. See README for all options."
+    echo "MCP_BIND=0.0.0.0"
+    echo "MCP_PORT=8080"
+    echo "DECO_USERNAME=admin"
+  fi
+  echo "DECO_HOST=$host"
+  echo "DECO_PASSWORD=$pw"
+  echo "MCP_TOKEN=$token"
+} > "$tmp"
+chmod 600 "$tmp"
+mv "$tmp" "$ENV"
+echo "Wrote $ENV. Apply with: systemctl restart deco-mcp"

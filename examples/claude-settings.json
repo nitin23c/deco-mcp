@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__deco__deco_status",
+      "mcp__deco__deco_clients",
+      "mcp__deco__deco_reservations"
+    ],
+    "ask": [
+      "mcp__deco__deco_reservation_add",
+      "mcp__deco__deco_reservation_change",
+      "mcp__deco__deco_reservation_remove",
+      "mcp__deco__deco_reboot"
+    ]
+  }
+}

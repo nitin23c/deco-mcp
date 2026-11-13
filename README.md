@@ -69,7 +69,7 @@ It needs Python 3.14, which the installer fetches with
 On a Debian or Ubuntu host, as root:
 
 ```sh
-git clone https://github.com/<you>/deco-mcp.git
+git clone https://github.com/nitin23c/deco-mcp.git
 cd deco-mcp
 ./deploy/install.sh          # packages, uv, Python 3.14, pinned library, systemd unit
 deco-mcp-setup               # router address and password (hidden), makes a token

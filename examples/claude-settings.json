@@ -3,7 +3,8 @@
     "allow": [
       "mcp__deco__deco_status",
       "mcp__deco__deco_clients",
-      "mcp__deco__deco_reservations"
+      "mcp__deco__deco_reservations",
+      "mcp__deco__deco_config"
     ],
     "ask": [
       "mcp__deco__deco_reservation_add",

@@ -170,6 +170,101 @@ def clients(router: Router, args: dict[str, Any]) -> Any:
     return router.call(run)
 
 
+# Read-only endpoints tried by deco_config: (section, path, form, operation).
+# Many forms are served only to the Deco app; those answer 404 on the web API
+# and are reported as unavailable. Only read-style operations belong here.
+CONFIG_READS: tuple[tuple[str, str, str, str], ...] = (
+    ("system", "admin/device", "mode", "read"),
+    ("system", "admin/device", "timesetting", "read"),
+    ("system", "admin/device", "gateway", "read"),
+    ("system", "admin/system", "sysmode", "read"),
+    ("system", "admin/eco_mode", "eco_mode", "read"),
+    ("wan", "admin/network", "wan_mode", "read"),
+    ("wan", "admin/network", "wan_ipv4", "read"),
+    ("wan", "admin/network", "dhcp_dial", "read"),
+    ("wan", "admin/network", "mac_clone", "read"),
+    ("wan", "admin/network", "vlan", "read"),
+    ("lan", "admin/network", "lan_ipv4", "read"),
+    ("lan", "admin/network", "lan_ip", "read"),
+    ("lan", "admin/dhcp", "dhcp_info", "read"),
+    ("lan", "admin/network", "igmp_setting", "read"),
+    ("lan", "admin/network", "routes_static", "getlist"),
+    ("lan", "admin/network", "routes_system", "getlist"),
+    ("ipv6", "admin/network", "ipv6", "read"),
+    ("ipv6", "admin/ipv6_firewall", "firewall", "read"),
+    ("wifi", "admin/wireless", "wlan", "read"),
+    ("wifi", "admin/wireless", "operation_mode", "read"),
+    ("wifi", "admin/wireless", "ieee80211r", "read"),
+    ("wifi", "admin/wireless", "beamforming", "read"),
+    ("wifi", "admin/wireless", "bandwidth_enhance", "read"),
+    ("wifi", "admin/wireless", "power", "read"),
+    ("wifi", "admin/wireless", "ofdma", "read"),
+    ("wifi", "admin/wireless", "wifi_schedule", "read"),
+    ("wifi", "admin/network", "wifi_network", "read"),
+    ("wifi", "admin/wps", "status", "get"),
+    ("nat", "admin/nat", "setting", "read"),
+    ("nat", "admin/nat", "vs", "getlist"),
+    ("nat", "admin/nat", "dmz", "read"),
+    ("nat", "admin/nat", "alg", "get"),
+    ("nat", "admin/nat", "sip_alg", "get"),
+    ("nat", "admin/network", "upnp", "read"),
+    ("services", "admin/ddns", "ddns", "get"),
+    ("services", "admin/iptv", "iptv", "get"),
+    ("services", "admin/vpn_client", "config", "read"),
+    ("services", "admin/vpn_server", "server", "read"),
+    ("security", "admin/security", "info", "read"),
+    ("security", "admin/administration", "remote", "read"),
+    ("security", "admin/client", "black_list", "list"),
+    ("security", "admin/client", "client_isolation", "read"),
+    ("security", "admin/qos", "tm_qos", "read"),
+)
+
+_SECRET_KEY = re.compile(
+    r"pass|pwd|psk|key|secret|token|(?:^|_)pin(?:$|_)|cert|cookie|account|email|user", re.IGNORECASE
+)
+
+
+def scrub(obj: Any) -> Any:
+    """Replace the value of any secret-looking field, at any depth."""
+    if isinstance(obj, dict):
+        return {
+            k: ("<redacted>" if _SECRET_KEY.search(str(k)) and v not in ("", None, [], {}) else scrub(v))
+            for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [scrub(x) for x in obj]
+    return obj
+
+
+def config(router: Router, args: dict[str, Any]) -> Any:
+    wanted = args.get("sections") or []
+    if not isinstance(wanted, list):
+        raise ToolError("sections must be a list of section names")
+    known = sorted({s for s, *_ in CONFIG_READS})
+    unknown = [s for s in wanted if s not in known]
+    if unknown:
+        raise ToolError(f"Unknown sections {unknown}; choose from {known}")
+
+    def run(deco: Any) -> Any:
+        out: dict[str, dict[str, Any]] = {}
+        unavailable: list[str] = []
+        for section, path, form, op in CONFIG_READS:
+            if wanted and section not in wanted:
+                continue
+            name = f"{path.removeprefix('admin/')}:{form}"
+            try:
+                result = deco.request(path, form, {"operation": op})
+            except Exception as exc:  # noqa: BLE001 - firmware dependent
+                unavailable.append(f"{name} ({type(exc).__name__})")
+                log.info("config %s unavailable: %s", name, redact(str(exc)))
+                continue
+            out.setdefault(section, {})[name] = scrub(result)
+        return {"config": out, "unavailable": unavailable,
+                "note": "Fields that look like passwords, keys, tokens or accounts are redacted."}
+
+    return router.call(run)
+
+
 def reservations(router: Router, _args: dict[str, Any]) -> Any:
     def run(deco: Any) -> Any:
         table = deco.address_reservations.get_table()
@@ -280,6 +375,14 @@ ALL_TOOLS: tuple[Tool, ...] = (
          {"type": "object", "additionalProperties": False,
           "properties": {"online_only": {"type": "boolean", "description": "Only clients online now"}}},
          False, clients),
+    Tool("deco_config",
+         "Read the router's settings (system, WAN, LAN, IPv6, Wi-Fi, NAT and port forwarding, services, "
+         "security). Read-only; secrets are redacted. Endpoints this firmware doesn't serve are listed "
+         "as unavailable.",
+         {"type": "object", "additionalProperties": False,
+          "properties": {"sections": {"type": "array", "items": {"type": "string"},
+                                      "description": "Limit to these sections (default all)"}}},
+         False, config),
     Tool("deco_reservations",
          "List DHCP address reservations (MAC to IP), with each device's name and current IP where known.",
          _NONE, False, reservations),

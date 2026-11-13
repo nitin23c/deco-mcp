@@ -6,7 +6,8 @@ manage DHCP address reservations, using the router's own local web API.
 
 - List connected clients with name, MAC, IP and the node they're on.
 - List, add, change and remove DHCP address reservations.
-- Read status: mesh nodes, model, firmware, internet, CPU and memory, DHCP pool.
+- Read status and settings: mesh nodes, model, firmware, internet, WAN, LAN, Wi-Fi
+  and more, with secrets redacted.
 - Reboot the mesh (off by default).
 
 Everything stays on your network. The server talks only to the router's
@@ -45,6 +46,7 @@ whether it works or not.
 | `deco_status` | Mesh nodes (model, firmware, role, IP), internet status, CPU and memory, and the DHCP pool where the firmware exposes it (not on the M4R) | no |
 | `deco_clients` | Clients with name, MAC, IP, online state, connection and node. `online_only` filter | no |
 | `deco_reservations` | Reservations (MAC to IP), each with the device's name and current IP | no |
+| `deco_config` | Router settings (system, WAN, LAN, IPv6, Wi-Fi, NAT, services, security). Secret-looking fields are redacted on the server. Forms the firmware serves only to the Deco app are listed as unavailable | no |
 | `deco_reservation_add` | Add a reservation. Refuses duplicates and addresses outside the LAN | yes |
 | `deco_reservation_change` | Change the IP of a reservation | yes |
 | `deco_reservation_remove` | Remove a reservation | yes |

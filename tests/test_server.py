@@ -180,7 +180,7 @@ def test_tool_list_respects_modes(st):
 
     assert "deco_reboot" in names(app_for(st))
     assert "deco_reboot" not in names(app_for(st, allow_reboot=False))
-    assert names(app_for(st, read_only=True)) == {"deco_status", "deco_clients", "deco_reservations"}
+    assert names(app_for(st, read_only=True)) == {"deco_status", "deco_clients", "deco_reservations", "deco_config"}
 
 
 def test_disabled_tool_cannot_be_called(st):
@@ -322,3 +322,23 @@ def test_router_errors_are_redacted(st):
     from deco_mcp.tools import redact
 
     assert redact("POST https://r/cgi-bin/luci/;stok=abc123/admin") == "POST https://r/cgi-bin/luci/;stok=<redacted>/admin"
+
+
+def test_scrub_redacts_secrets_at_any_depth():
+    from deco_mcp.tools import scrub
+
+    raw = {"ssid": "home", "password": "p", "guest": {"psk_key": "k", "enable": True},
+           "list": [{"wps_pin": "1234", "mapping": 1, "username": "u"}], "empty_pwd": ""}
+    assert scrub(raw) == {"ssid": "home", "password": "<redacted>",
+                          "guest": {"psk_key": "<redacted>", "enable": True},
+                          "list": [{"wps_pin": "<redacted>", "mapping": 1, "username": "<redacted>"}],
+                          "empty_pwd": ""}
+
+
+def test_config_reports_unavailable_and_scrubs(st):
+    err, out = call(app_for(st), "deco_config", sections=["wifi"])
+    assert not err
+    assert set(out["config"]) == {"wifi"}
+    err, msg = call(app_for(st), "deco_config", sections=["nope"])
+    assert err and "Unknown sections" in msg
+    assert all(c[3] in ("read", "get", "getlist", "list") for c in st.calls if c[0] == "request")

@@ -4,8 +4,10 @@ An [MCP](https://modelcontextprotocol.io) server for **TP-Link Deco** mesh
 routers. It lets an AI assistant such as Claude Code read the router and
 manage DHCP address reservations, using the router's own local web API.
 
-- List connected clients with name, MAC, IP and the node they're on.
-- List, add, change and remove DHCP address reservations.
+- List connected clients with name, MAC, IP and the node they're on, see who is
+  using the bandwidth, and rename clients.
+- List, add, change and remove DHCP address reservations, and audit them for
+  clashes and drift.
 - Read status and settings: mesh nodes, model, firmware, internet, WAN, LAN, Wi-Fi
   and more, with secrets redacted.
 - Reboot the mesh (off by default).
@@ -47,6 +49,9 @@ whether it works or not.
 | `deco_clients` | Clients with name, MAC, IP, online state, connection and node. `online_only` filter | no |
 | `deco_reservations` | Reservations (MAC to IP), each with the device's name and current IP | no |
 | `deco_config` | Router settings (system, WAN, LAN, IPv6, Wi-Fi, NAT, services, security). Secret-looking fields are redacted on the server. Forms the firmware serves only to the Deco app are listed as unavailable | no |
+| `deco_traffic` | Current upload and download rate per online client, busiest first, with totals. Seems to count internet traffic only, not traffic inside the LAN | no |
+| `deco_audit` | Checks reservations for duplicates, reserved IPs used by another device, devices not on their reserved IP, reservations for unknown or offline devices, and generic client names. Pass `expected` (MAC, IP, name, `static`), for example from a hypervisor's guest list, to also check that each device has the reservation it should and that static IPs aren't taken | no |
+| `deco_client_rename` | Rename a client as shown in the Deco app | yes |
 | `deco_reservation_add` | Add a reservation. Refuses duplicates and addresses outside the LAN | yes |
 | `deco_reservation_change` | Change the IP of a reservation | yes |
 | `deco_reservation_remove` | Remove a reservation | yes |

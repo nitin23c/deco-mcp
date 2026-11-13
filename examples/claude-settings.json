@@ -4,9 +4,12 @@
       "mcp__deco__deco_status",
       "mcp__deco__deco_clients",
       "mcp__deco__deco_reservations",
-      "mcp__deco__deco_config"
+      "mcp__deco__deco_config",
+      "mcp__deco__deco_traffic",
+      "mcp__deco__deco_audit"
     ],
     "ask": [
+      "mcp__deco__deco_client_rename",
       "mcp__deco__deco_reservation_add",
       "mcp__deco__deco_reservation_change",
       "mcp__deco__deco_reservation_remove",

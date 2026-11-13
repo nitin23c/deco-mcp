@@ -285,7 +285,149 @@ def reservations(router: Router, _args: dict[str, Any]) -> Any:
     return router.call(run)
 
 
+GENERIC_NAME = re.compile(
+    r"^(device_[0-9a-f]{4}|lwip\d*|wlan\d*|espressif|esp[-_]?[0-9a-f]*|unknown|android-[0-9a-f]+|)$",
+    re.IGNORECASE,
+)
+
+
+def traffic(router: Router, args: dict[str, Any]) -> Any:
+    try:
+        top = max(1, min(100, int(args.get("top", 10))))
+    except (TypeError, ValueError) as exc:
+        raise ToolError("top must be a number") from exc
+
+    def run(deco: Any) -> Any:
+        online = [c for c in deco.get_client_list() if c.online and c.mac]
+        rows = [
+            {
+                "name": c.name,
+                "mac": _mac_or_raw(c.mac),
+                "ip": c.ip,
+                "down": c.down_speed,
+                "up": c.up_speed,
+                "connection": c.wire_type or c.connection_type,
+            }
+            for c in online
+        ]
+        rows.sort(key=lambda r: (r["down"] or 0) + (r["up"] or 0), reverse=True)
+        return {
+            "units": "as reported by the router; the library documents KB/s",
+            "total": {"down": sum(r["down"] or 0 for r in rows), "up": sum(r["up"] or 0 for r in rows),
+                      "online_clients": len(rows)},
+            "busiest": rows[:top],
+            "note": "A snapshot of current rates, not usage over time.",
+        }
+
+    return router.call(run)
+
+
+def _expected(args: dict[str, Any], router: Router) -> list[dict[str, Any]]:
+    raw = args.get("expected") or []
+    if not isinstance(raw, list):
+        raise ToolError("expected must be a list of objects")
+    out = []
+    for i, e in enumerate(raw):
+        if not isinstance(e, dict) or "mac" not in e:
+            raise ToolError(f"expected[{i}] needs at least a mac")
+        item = {"mac": norm_mac(e["mac"]), "name": str(e.get("name", ""))[:80],
+                "static": bool(e.get("static", False))}
+        if e.get("ip"):
+            item["ip"] = router.check_ip(e["ip"])
+        out.append(item)
+    return out
+
+
+def audit(router: Router, args: dict[str, Any]) -> Any:
+    expected = _expected(args, router)
+
+    def run(deco: Any) -> Any:
+        table = deco.address_reservations.get_table()
+        reserved = {norm_mac(r.mac): r.ip for r in table.reservations}
+        by_ip: dict[str, list[str]] = {}
+        for mac, ip in reserved.items():
+            by_ip.setdefault(ip, []).append(mac)
+        clients = {_mac_or_raw(c.mac): c for c in deco.get_client_list() if c.mac}
+        holder = {c.ip: mac for mac, c in clients.items() if c.online and c.ip}
+        findings: list[dict[str, Any]] = []
+
+        def add(severity: str, kind: str, detail: str, **extra: Any) -> None:
+            findings.append({"severity": severity, "kind": kind, "detail": detail, **extra})
+
+        for ip, macs in by_ip.items():
+            if len(macs) > 1:
+                add("problem", "duplicate_reservation", f"{ip} is reserved for {', '.join(macs)}", ip=ip)
+        for mac, ip in reserved.items():
+            c = clients.get(mac)
+            if c is None:
+                add("info", "reserved_unknown", f"{ip} is reserved for {mac}, which the router doesn't know",
+                    mac=mac, ip=ip)
+            elif not c.online:
+                add("info", "reserved_offline", f"{ip} is reserved for {c.name or mac}, offline", mac=mac, ip=ip)
+            elif c.ip != ip:
+                add("warning", "not_on_reserved_ip",
+                    f"{c.name or mac} is on {c.ip}, reserved {ip}; it moves at its next lease renewal",
+                    mac=mac, ip=ip, current_ip=c.ip)
+            other = holder.get(ip)
+            if other and other != mac:
+                add("problem", "reserved_ip_in_use",
+                    f"{ip} is reserved for {mac} but {clients[other].name or other} is using it",
+                    mac=mac, ip=ip, user=other)
+        for mac, c in clients.items():
+            if c.online and GENERIC_NAME.match((c.name or "").strip()):
+                add("info", "generic_name", f"{c.ip} {mac} is named {c.name!r}; consider renaming",
+                    mac=mac, ip=c.ip)
+        for e in expected:
+            mac, ip, label = e["mac"], e.get("ip"), e["name"] or e["mac"]
+            have = reserved.get(mac)
+            if ip and ip in by_ip and mac not in by_ip[ip]:
+                add("problem", "expected_ip_reserved_for_other",
+                    f"{label} expects {ip}, but it is reserved for {', '.join(by_ip[ip])}", mac=mac, ip=ip)
+            if have and ip and have != ip:
+                add("problem", "reservation_mismatch", f"{label} expects {ip} but is reserved {have}",
+                    mac=mac, ip=ip, reserved_ip=have)
+            elif not have:
+                sev = "warning" if e["static"] else "info"
+                why = ("static address with no reservation; the DHCP server could hand it out"
+                       if e["static"] else "no reservation")
+                add(sev, "missing_reservation", f"{label}{' at ' + ip if ip else ''}: {why}", mac=mac, ip=ip)
+            user = holder.get(ip) if ip else None
+            if user and user != mac:
+                add("problem", "expected_ip_in_use",
+                    f"{label} expects {ip}, but {clients[user].name or user} is using it now",
+                    mac=mac, ip=ip, user=user)
+            c = clients.get(mac)
+            if ip and c and c.online and c.ip and c.ip != ip:
+                add("warning", "expected_ip_mismatch", f"{label} expects {ip} but is on {c.ip}",
+                    mac=mac, ip=ip, current_ip=c.ip)
+
+        order = {"problem": 0, "warning": 1, "info": 2}
+        findings.sort(key=lambda f: (order[f["severity"]], _ip_key(f.get("ip") or "")))
+        counts = {s: sum(f["severity"] == s for f in findings) for s in order}
+        return {"reservations": len(reserved), "max": table.max_count, "counts": counts, "findings": findings}
+
+    return router.call(run)
+
+
 # ----------------------------------------------------------------- writes
+
+
+def client_rename(router: Router, args: dict[str, Any]) -> Any:
+    mac = norm_mac(args.get("mac", ""))
+    name = str(args.get("name", "")).strip()
+    if not name or len(name) > 64 or any(ord(ch) < 32 for ch in name):
+        raise ToolError("name must be 1 to 64 printable characters")
+
+    def run(deco: Any) -> Any:
+        known = {_mac_or_raw(c.mac): c for c in deco.get_client_list()}
+        if mac not in known:
+            raise ToolError(f"{mac} is not in the router's client list")
+        old = known[mac].name
+        deco.clients.update(mac, name)
+        log.warning("WRITE client rename %s %r -> %r", mac, old, name)
+        return {"renamed": {"mac": mac, "from": old, "to": name}}
+
+    return router.call(run)
 
 
 def reservation_add(router: Router, args: dict[str, Any]) -> Any:
@@ -386,6 +528,30 @@ ALL_TOOLS: tuple[Tool, ...] = (
     Tool("deco_reservations",
          "List DHCP address reservations (MAC to IP), with each device's name and current IP where known.",
          _NONE, False, reservations),
+    Tool("deco_traffic",
+         "Current upload and download rate per online client, busiest first, with totals.",
+         {"type": "object", "additionalProperties": False,
+          "properties": {"top": {"type": "integer", "description": "How many clients to list (default 10)"}}},
+         False, traffic),
+    Tool("deco_audit",
+         "Check DHCP reservations for problems: duplicates, reserved IPs used by another device, devices "
+         "not on their reserved IP, reservations for unknown or offline devices, and generic client names. "
+         "Pass `expected` (e.g. from a hypervisor's guest list) to also check that each device has the "
+         "reservation it should. Read-only.",
+         {"type": "object", "additionalProperties": False,
+          "properties": {"expected": {"type": "array", "description": "Devices that should be reserved",
+                                      "items": {"type": "object", "additionalProperties": False,
+                                                "required": ["mac"],
+                                                "properties": {"mac": _MAC, "ip": _IP,
+                                                               "name": {"type": "string"},
+                                                               "static": {"type": "boolean",
+                                                                          "description": "Device sets this IP itself"}}}}}},
+         False, audit),
+    Tool("deco_client_rename", "Rename a client as shown in the Deco app and router." + _ASK,
+         {"type": "object", "additionalProperties": False,
+          "properties": {"mac": _MAC, "name": {"type": "string", "description": "New name, 1-64 characters"}},
+          "required": ["mac", "name"]},
+         True, client_rename),
     Tool("deco_reservation_add", "Add a DHCP address reservation." + _ASK,
          {"type": "object", "additionalProperties": False,
           "properties": {"mac": _MAC, "ip": _IP}, "required": ["mac", "ip"]},

@@ -39,6 +39,8 @@ class Client:
     connection_type: str = ""
     access_host: str = "02-00-00-00-00-AA"
     client_type: str = "pc"
+    up_speed: int = 1
+    down_speed: int = 2
 
 
 @dataclass
@@ -87,11 +89,20 @@ class FakeReservations:
         self.st.reservations = [x for x in self.st.reservations if x.mac.replace("-", ":") != mac]
 
 
+class FakeClients:
+    def __init__(self, st: FakeState) -> None:
+        self.st = st
+
+    def update(self, mac, name, client_type=None):
+        self.st.calls.append(("rename", mac, name))
+
+
 def fake_factory(st: FakeState):
     class FakeDeco:
         def __init__(self, host, username, password, timeout):
             assert (host, username, password) == ("10.9.0.1", "admin", "pw")
             self.address_reservations = FakeReservations(st)
+            self.clients = FakeClients(st)
 
         def login(self):
             st.logins += 1
@@ -141,9 +152,9 @@ def app_for(st, **over) -> McpApp:
     return McpApp(cfg, Router(cfg, client_factory=fake_factory(st)))
 
 
-def call(app, name, **args):
+def call(app, tool, /, **args):
     reply = app.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                        "params": {"name": name, "arguments": args}})
+                        "params": {"name": tool, "arguments": args}})
     res = reply["result"]
     text = res["content"][0]["text"]
     return res["isError"], (text if res["isError"] else json.loads(text))
@@ -180,7 +191,7 @@ def test_tool_list_respects_modes(st):
 
     assert "deco_reboot" in names(app_for(st))
     assert "deco_reboot" not in names(app_for(st, allow_reboot=False))
-    assert names(app_for(st, read_only=True)) == {"deco_status", "deco_clients", "deco_reservations", "deco_config"}
+    assert names(app_for(st, read_only=True)) == {"deco_status", "deco_clients", "deco_reservations", "deco_config", "deco_traffic", "deco_audit"}
 
 
 def test_disabled_tool_cannot_be_called(st):
@@ -342,3 +353,47 @@ def test_config_reports_unavailable_and_scrubs(st):
     err, msg = call(app_for(st), "deco_config", sections=["nope"])
     assert err and "Unknown sections" in msg
     assert all(c[3] in ("read", "get", "getlist", "list") for c in st.calls if c[0] == "request")
+
+
+def test_traffic_sorts_busiest_first(st):
+    st.clients.append(Client("02-00-00-00-00-05", "10.9.0.90", "tv", up_speed=10, down_speed=500))
+    err, out = call(app_for(st), "deco_traffic", top=1)
+    assert not err
+    assert out["busiest"][0]["name"] == "tv"
+    assert out["total"] == {"down": 502, "up": 11, "online_clients": 2}
+
+
+def test_audit_finds_problems(st):
+    st.reservations.append(Res("02-00-00-00-00-09", "10.9.0.77"))   # unknown device
+    st.reservations.append(Res("02-00-00-00-00-02", "10.9.0.60"))   # offline laptop
+    st.clients.append(Client("02-00-00-00-00-06", "10.9.0.77", "Device_ABCD"))  # holds .77
+    st.clients.append(Client("02-00-00-00-00-07", "10.9.0.88", "nas"))
+    st.reservations.append(Res("02-00-00-00-00-07", "10.9.0.66"))   # nas not on reserved IP
+    err, out = call(app_for(st), "deco_audit", expected=[
+        {"mac": "02:00:00:00:00:08", "ip": "10.9.0.100", "name": "proxy", "static": True},
+        {"mac": "02:00:00:00:00:0A", "ip": "10.9.0.50", "name": "clash"},
+    ])
+    assert not err
+    kinds = {(f["kind"], f.get("mac")) for f in out["findings"]}
+    assert ("reserved_unknown", "02:00:00:00:00:09") in kinds
+    assert ("reserved_ip_in_use", "02:00:00:00:00:09") in kinds
+    assert ("reserved_offline", "02:00:00:00:00:02") in kinds
+    assert ("not_on_reserved_ip", "02:00:00:00:00:07") in kinds
+    assert ("generic_name", "02:00:00:00:00:06") in kinds
+    assert ("missing_reservation", "02:00:00:00:00:08") in kinds
+    assert ("expected_ip_reserved_for_other", "02:00:00:00:00:0A") in kinds
+    err, out = call(app_for(st), "deco_audit", expected=[{"mac": "02:00:00:00:00:0B", "ip": "10.9.0.88", "static": True}])
+    assert ("expected_ip_in_use", "02:00:00:00:00:0B") in {(f["kind"], f.get("mac")) for f in out["findings"]}
+    assert out["findings"][0]["severity"] == "problem"
+    assert not [c for c in st.calls if c[0] in ("add", "modify", "remove", "rename")]
+
+
+def test_rename_checks_input_and_client(st):
+    app = app_for(st)
+    assert call(app, "deco_client_rename", mac="02:00:00:00:00:01", name="")[0]
+    assert call(app, "deco_client_rename", mac="02:00:00:00:00:01", name="x" * 65)[0]
+    err, msg = call(app, "deco_client_rename", mac="02:00:00:00:00:09", name="ghost")
+    assert err and "not in the router" in msg
+    err, out = call(app, "deco_client_rename", mac="02-00-00-00-00-01", name="homelab")
+    assert not err and out["renamed"] == {"mac": "02:00:00:00:00:01", "from": "server", "to": "homelab"}
+    assert ("rename", "02:00:00:00:00:01", "homelab") in st.calls

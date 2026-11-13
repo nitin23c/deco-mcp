@@ -1,6 +1,7 @@
 # deco-mcp with Docker Compose. Before the first start:
 #   mkdir -p secrets && chmod 700 secrets
-#   docker compose run --rm --no-deps deco-mcp --new-token > secrets/mcp_token
+#   docker compose build
+#   docker run --rm deco-mcp:local --new-token > secrets/mcp_token
 #   (umask 077; printf 'Router password: '; stty -echo; read -r p; stty echo; echo; printf '%s' "$p" > secrets/deco_password)
 #   chmod 644 secrets/*   # readable by the container user; the 700 folder keeps others out
 #   docker compose up -d

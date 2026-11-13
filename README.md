@@ -82,7 +82,7 @@ git clone https://github.com/nitin23c/deco-mcp.git
 cd deco-mcp
 mkdir -p secrets && chmod 700 secrets
 docker compose build
-docker compose run --rm --no-deps deco-mcp --new-token > secrets/mcp_token
+docker run --rm deco-mcp:local --new-token > secrets/mcp_token
 (umask 077; printf 'Router password: '; stty -echo; read -r p; stty echo; echo
  printf '%s' "$p" > secrets/deco_password)
 chmod 644 secrets/*      # the container user must read them; the 700 folder keeps others out

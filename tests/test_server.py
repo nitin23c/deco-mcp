@@ -397,3 +397,38 @@ def test_rename_checks_input_and_client(st):
     err, out = call(app, "deco_client_rename", mac="02-00-00-00-00-01", name="homelab")
     assert not err and out["renamed"] == {"mac": "02:00:00:00:00:01", "from": "server", "to": "homelab"}
     assert ("rename", "02:00:00:00:00:01", "homelab") in st.calls
+
+
+def test_secrets_can_come_from_files(monkeypatch, tmp_path):
+    (tmp_path / "pw").write_text("from-file\n")
+    (tmp_path / "tok").write_text("k" * 64 + "\n")
+    monkeypatch.setenv("DECO_PASSWORD", "from-env")
+    monkeypatch.setenv("DECO_PASSWORD_FILE", str(tmp_path / "pw"))
+    monkeypatch.setenv("MCP_TOKEN_FILE", str(tmp_path / "tok"))
+    monkeypatch.delenv("DECO_HOST", raising=False)
+    cfg = Config.from_env()
+    assert cfg.password == "from-file" and cfg.token == "k" * 64 and not cfg.problems
+
+
+def test_missing_secret_file_does_not_echo_path(monkeypatch):
+    monkeypatch.setenv("DECO_PASSWORD_FILE", "/nonexistent/s3cret-path")
+    with pytest.raises(SystemExit) as exc:
+        Config.from_env()
+    assert "s3cret-path" not in str(exc.value)
+
+
+def test_healthcheck(http_server, monkeypatch):
+    from deco_mcp.server import _healthcheck
+
+    monkeypatch.setenv("MCP_PORT", str(http_server))
+    assert _healthcheck() == 0
+    monkeypatch.setenv("MCP_PORT", "1")
+    assert _healthcheck() == 1
+
+
+def test_new_token(capsys):
+    from deco_mcp.server import main
+
+    main(["--new-token"])
+    out = capsys.readouterr().out.strip()
+    assert len(out) == 64 and int(out, 16) >= 0

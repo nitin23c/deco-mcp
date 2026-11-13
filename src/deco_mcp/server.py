@@ -177,11 +177,39 @@ def make_handler(app: McpApp) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
+def _healthcheck() -> int:
+    """An unauthenticated POST should be refused with 401 or 403: that means it's up.
+
+    Needs no secrets and never reaches the router.
+    """
+    import http.client
+    import os
+
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", int(os.environ.get("MCP_PORT", "8080")), timeout=3)
+        conn.request("POST", "/mcp", body=b"{}", headers={"Content-Type": "application/json"})
+        status = conn.getresponse().status
+    except (OSError, ValueError, http.client.HTTPException):
+        return 1
+    return 0 if status in (401, 403) else 1
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="deco-mcp", description=__doc__)
     parser.add_argument("--check", action="store_true", help="log in once, print the mesh nodes, exit")
+    parser.add_argument("--new-token", action="store_true", help="print a random token for MCP_TOKEN, exit")
+    parser.add_argument("--healthcheck", action="store_true",
+                        help="exit 0 if the server on MCP_PORT is answering (for container health checks)")
     parser.add_argument("--version", action="version", version=__version__)
     opts = parser.parse_args(argv)
+
+    if opts.new_token:
+        import secrets
+
+        print(secrets.token_hex(32))
+        return
+    if opts.healthcheck:
+        sys.exit(_healthcheck())
 
     logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(levelname)s %(name)s %(message)s")
     cfg = Config.from_env()

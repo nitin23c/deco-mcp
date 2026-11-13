@@ -1,0 +1,36 @@
+# deco-mcp with Docker Compose. Before the first start:
+#   mkdir -p secrets && chmod 700 secrets
+#   docker compose run --rm --no-deps deco-mcp --new-token > secrets/mcp_token
+#   (umask 077; printf 'Router password: '; stty -echo; read -r p; stty echo; echo; printf '%s' "$p" > secrets/deco_password)
+#   chmod 644 secrets/*   # readable by the container user; the 700 folder keeps others out
+#   docker compose up -d
+services:
+  deco-mcp:
+    build: .
+    image: deco-mcp:local
+    container_name: deco-mcp
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      DECO_HOST: 192.168.68.1            # your router's address
+      DECO_PASSWORD_FILE: /run/secrets/deco_password
+      MCP_TOKEN_FILE: /run/secrets/mcp_token
+      # Who may connect. Clients on your LAN keep their own address; requests from
+      # the Docker host itself arrive from the bridge network (172.16.0.0/12).
+      MCP_ALLOW_NETS: "127.0.0.0/8,192.168.68.0/24,172.16.0.0/12"
+      # DECO_READ_ONLY: "1"              # hide every tool that changes the router
+      # DECO_ALLOW_REBOOT: "1"           # offer deco_reboot
+    secrets:
+      - deco_password
+      - mcp_token
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  deco_password:
+    file: ./secrets/deco_password
+  mcp_token:
+    file: ./secrets/mcp_token

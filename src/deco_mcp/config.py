@@ -7,6 +7,21 @@ import os
 from dataclasses import dataclass, field
 
 
+def _secret(name: str) -> str:
+    """Read NAME, or the file named by NAME_FILE (Docker/Podman secrets).
+
+    The file wins if both are set. Trailing newlines are stripped.
+    """
+    path = os.environ.get(f"{name}_FILE")
+    if path:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return fh.read().rstrip("\r\n")
+        except OSError:
+            raise SystemExit(f"deco-mcp: cannot read {name}_FILE") from None
+    return os.environ.get(name, "")
+
+
 def _flag(name: str, default: bool = False) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -54,8 +69,8 @@ class Config:
         cfg = cls(
             host=host,
             username=os.environ.get("DECO_USERNAME", "admin"),
-            password=os.environ.get("DECO_PASSWORD", ""),
-            token=os.environ.get("MCP_TOKEN", ""),
+            password=_secret("DECO_PASSWORD"),
+            token=_secret("MCP_TOKEN"),
             bind=os.environ.get("MCP_BIND", "127.0.0.1"),
             port=port,
             lan=lan,
@@ -66,7 +81,7 @@ class Config:
         )
         problems = []
         if not cfg.password:
-            problems.append("DECO_PASSWORD is not set")
+            problems.append("DECO_PASSWORD (or DECO_PASSWORD_FILE) is not set")
         if len(cfg.token) < 32:
-            problems.append("MCP_TOKEN is not set or shorter than 32 characters")
+            problems.append("MCP_TOKEN (or MCP_TOKEN_FILE) is not set or shorter than 32 characters")
         return cls(**{**cfg.__dict__, "problems": tuple(problems)})

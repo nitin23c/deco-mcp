@@ -66,12 +66,44 @@ DHCP lease or reconnects.
 
 ## Install
 
-The server is meant to run on an always-on Linux box on the same LAN as the
-router: a small Proxmox LXC or VM is ideal (1 core, 512 MB RAM, 4 GB disk).
-It needs Python 3.14, which the installer fetches with
-[uv](https://github.com/astral-sh/uv).
+Run it on an always-on machine on the same LAN as the router. There are two
+ways: [Docker](#docker), or a plain [systemd service](#systemd) on a small
+Proxmox LXC or VM (1 core, 512 MB RAM, 4 GB disk).
 
-On a Debian or Ubuntu host, as root:
+### Docker
+
+The image is built from this repo. It runs Python 3.14 as an unprivileged
+user on a read-only filesystem, and installs dependencies from
+[`deploy/requirements.lock`](deploy/requirements.lock) with
+`--require-hashes`. The secrets are Docker secret files.
+
+```sh
+git clone https://github.com/nitin23c/deco-mcp.git
+cd deco-mcp
+mkdir -p secrets && chmod 700 secrets
+docker compose build
+docker compose run --rm --no-deps deco-mcp --new-token > secrets/mcp_token
+(umask 077; printf 'Router password: '; stty -echo; read -r p; stty echo; echo
+ printf '%s' "$p" > secrets/deco_password)
+chmod 644 secrets/*      # the container user must read them; the 700 folder keeps others out
+docker compose up -d
+docker compose ps        # STATUS shows "healthy"
+```
+
+Edit [`compose.yaml`](compose.yaml) first: set `DECO_HOST`, and set
+`MCP_ALLOW_NETS` to your LAN. Clients on the LAN reach the container with
+their own address. Requests from the Docker host itself arrive from Docker's
+bridge network, which is why `172.16.0.0/12` is in the default list. The
+endpoint is `http://<docker-host>:8080/mcp`.
+
+The image's health check (`--healthcheck`) only checks that the server
+refuses an unauthenticated request. It needs no secrets and never contacts
+the router.
+
+### systemd
+
+It needs Python 3.14, which the installer fetches with
+[uv](https://github.com/astral-sh/uv). On a Debian or Ubuntu host, as root:
 
 ```sh
 git clone https://github.com/nitin23c/deco-mcp.git
@@ -79,7 +111,7 @@ cd deco-mcp
 ./deploy/install.sh          # packages, uv, Python 3.14, pinned library, systemd unit
 deco-mcp-setup               # router address and password (hidden), makes a token
 systemctl start deco-mcp
-journalctl -u deco-mcp -n 5  # "deco-mcp 0.1.0 on 0.0.0.0:8080, ..."
+journalctl -u deco-mcp -n 5  # "deco-mcp 0.2.0 on 0.0.0.0:8080, ..."
 ```
 
 `deploy/install.sh` installs the library from
@@ -107,7 +139,10 @@ replaces the token, and `--print-token` prints it.
 
 ## Configuration
 
-All settings are environment variables, normally in `/etc/deco-mcp.env`.
+All settings are environment variables: in `/etc/deco-mcp.env` for systemd,
+or in `compose.yaml` for Docker. Each secret can instead be read from a file
+by adding `_FILE` to its name (`DECO_PASSWORD_FILE`, `MCP_TOKEN_FILE`), which
+is how Docker secrets work.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -119,7 +154,7 @@ All settings are environment variables, normally in `/etc/deco-mcp.env`.
 | `DECO_READ_ONLY` | `0` | `1` hides every tool that changes the router |
 | `DECO_ALLOW_REBOOT` | `0` | `1` offers `deco_reboot` |
 | `MCP_TOKEN` | (required) | Bearer token, at least 32 characters |
-| `MCP_BIND` | `127.0.0.1` | Listen address. `deco-mcp-setup` writes `0.0.0.0` |
+| `MCP_BIND` | `127.0.0.1` | Listen address. `deco-mcp-setup` and the Docker image use `0.0.0.0` |
 | `MCP_PORT` | `8080` | Listen port. The endpoint is `/mcp` |
 | `MCP_ALLOW_NETS` | loopback and `DECO_LAN` | Comma-separated CIDRs allowed to connect |
 
@@ -184,6 +219,13 @@ Read this before exposing anything.
 
 Report security problems privately through GitHub's *Report a vulnerability*
 button. Please don't open a public issue.
+
+## Command line
+
+`python -m deco_mcp` (or `deco-mcp`) starts the server. Other options:
+`--check` logs in once and prints the mesh nodes, `--new-token` prints a random
+token, `--healthcheck` exits 0 if the local server is answering, and
+`--version` prints the version.
 
 ## Development
 
